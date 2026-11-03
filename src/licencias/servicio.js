@@ -7,6 +7,7 @@ import { esUuid, esFecha, esPeriodo, esCorreo, entero, texto, exigir } from '../
 import { generarToken, hashToken } from '../auth/productos.js';
 import { evaluarConsumo, resumenTokens, evaluarCupo, estadoCalculado, diasPara, periodoDe, fechaLocal, sumarMeses } from './reglas.js';
 import { enviar, plantillas } from './correos.js';
+import { configurado as keycloakConfigurado, darProducto, quitarProducto } from '../keycloak/empresas.js';
 
 const bd = { query: consultar };
 export const hoyLocal = () => fechaLocal(new Date(), config.zonaHoraria);
@@ -53,6 +54,20 @@ const bitacora = (c, quien, accion, licenciaId, antes, despues) => c.query(
   'INSERT INTO bitacora (quien, accion, licencia_id, antes, despues) VALUES ($1, $2, $3, $4, $5)',
   [quien, accion, licenciaId, json(antes), json(despues)],
 );
+export const anotar = (quien, accion, despues) => bitacora(bd, quien, accion, null, null, despues);
+
+// Al contratar (crear o reactivar una licencia) la empresa recibe en Keycloak el rol producto-* del producto, y lo pierde
+// al cancelar: asi sus personas entran (o dejan de entrar) por inicio unico. Es de mejor esfuerzo: si Keycloak no esta
+// configurado o falla, la licencia igual queda y se deja aviso en el log.
+async function sincronizarRol(v, dar) {
+  if (!keycloakConfigurado()) return;
+  try {
+    const hecho = dar ? await darProducto(v.empresa_uuid, v.producto) : await quitarProducto(v.empresa_uuid, v.producto);
+    if (!hecho && dar) console.warn(`Keycloak: no se pudo dar el rol de ${v.producto} a la empresa ${v.empresa_uuid} (¿existe en el grupo Empresas?)`);
+  } catch (e) {
+    console.error(`Keycloak: ${e.message}`);
+  }
+}
 
 // ---------- lectura ----------
 const SQL_LICENCIA = `SELECT l.*, p.nombre AS plan_nombre, pr.nombre AS producto_nombre, pr.usa_tokens
@@ -334,6 +349,7 @@ export async function crearLicencia(d, quien) {
     return v;
   });
   if (v.titular?.email) enviarLuego([{ para: v.titular.email, ...plantillas.licenciaCreada(v) }]);
+  await sincronizarRol(v, true);
   return v;
 }
 
@@ -384,6 +400,10 @@ export async function modificarLicencia(id, d, quien) {
     if (set.tokens_periodo !== undefined) await c.query('UPDATE periodos SET bolsa = $2 WHERE licencia_id = $1 AND periodo = $3', [id, set.tokens_periodo, periodoDe(hoy)]);
     const despues = await vistaPorId(id, c);
     await bitacora(c, quien, d.accion, id, antes, despues);
+    return despues;
+  }).then(async (despues) => {
+    if (d.accion === 'cancelar') await sincronizarRol(despues, false);
+    else if (d.accion === 'reactivar' || d.accion === 'renovar') await sincronizarRol(despues, true);
     return despues;
   });
 }

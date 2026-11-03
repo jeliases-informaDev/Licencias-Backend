@@ -27,6 +27,8 @@ Un consumo responde `{ permitido: true, nivel: normal|aviso|tolerancia, disponib
 
 **Universal:** `/v1/admin/reglas`, `/v1/admin/productos/{clave}/token`, `/v1/admin/planes`, `/v1/admin/licencias` (`PATCH` con `accion`: ampliar, renovar, cambiar_plan, suspender, reactivar, cancelar, titular), `/v1/admin/licencias/{id}/bolsas-extra`, `/v1/admin/consumos?periodo_desde&periodo_hasta&formato=xlsx`, `/v1/admin/solicitudes`, `/v1/admin/bitacora`.
 
+**Empresas (Keycloak):** `GET /v1/admin/empresas` (lista con uuid, nombre, slug y productos) y `POST /v1/admin/empresas {nombre, slug, productos}` (crea el subgrupo de «Empresas» con su UUID y da los roles `producto-*`). Al crear una licencia la empresa recibe el rol del producto; al cancelarla lo pierde. Requiere el cliente `licencias` de Keycloak (`KEYCLOAK_CLIENT_SECRET`).
+
 **Empresa:** `GET /v1/mi-licencia`, `GET /v1/mi-licencia/{producto}/consumos?periodo=AAAA-MM`, `POST /v1/mi-licencia/{producto}/ampliar {que, cantidad, comentario}`.
 
 Todos los errores son JSON `{ error, mensaje }` con el mensaje listo para mostrar.
