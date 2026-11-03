@@ -4,6 +4,7 @@ import ExcelJS from 'exceljs';
 import { autenticarPersona, soloUniversal } from '../auth/personas.js';
 import { exigir } from '../validar.js';
 import * as s from '../licencias/servicio.js';
+import * as empresas from '../keycloak/empresas.js';
 
 export const rutasAdmin = Router();
 rutasAdmin.use(autenticarPersona, soloUniversal);
@@ -17,6 +18,13 @@ const quien = (req) => req.persona.usuario;
 
 rutasAdmin.get('/reglas', async (req, res) => res.json(await s.listarReglas()));
 rutasAdmin.patch('/reglas', async (req, res) => res.json(await s.actualizarReglas(req.body, quien(req))));
+
+rutasAdmin.get('/empresas', async (req, res) => res.json(await empresas.listarEmpresas()));
+rutasAdmin.post('/empresas', async (req, res) => {
+  const e = await empresas.crearEmpresa(req.body || {});
+  await s.anotar(quien(req), 'crear_empresa', e);
+  res.status(201).json(e);
+});
 
 rutasAdmin.get('/productos', async (req, res) => res.json(await s.listarProductos()));
 rutasAdmin.post('/productos/:clave/token', async (req, res) => res.status(201).json(await s.rotarToken(req.params.clave, quien(req))));

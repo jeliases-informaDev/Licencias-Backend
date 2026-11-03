@@ -17,6 +17,11 @@ export const config = {
     audiencia: env('KEYCLOAK_AUDIENCE', 'licencias'),
     rolUniversal: env('ROL_UNIVERSAL', 'administrador-general'),
     jwksLocal: env('KEYCLOAK_JWKS_LOCAL'), // solo para pruebas: JWKS en JSON en vez del de cuenta.sulotec.com
+    // Cuenta de servicio con la que el servicio lee y crea empresas (grupos) en Keycloak. "interno" es la direccion
+    // dentro de la VM (http://cuenta:8080): /admin de cuenta.sulotec.com esta detras de Cloudflare Access.
+    interno: env('KEYCLOAK_INTERNO'),
+    clienteId: env('KEYCLOAK_CLIENT_ID', 'licencias'),
+    clienteSecreto: env('KEYCLOAK_CLIENT_SECRET'),
   },
   corsOrigenes: env('CORS_ORIGENES', 'https://sulotec.com').split(',').map((s) => s.trim()).filter(Boolean),
   portalUrl: env('PORTAL_URL', 'https://sulotec.com'),
