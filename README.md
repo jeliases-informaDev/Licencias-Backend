@@ -23,11 +23,30 @@ consumo con clave idempotente, avisos, vencimientos y bitácora. Los productos n
 ## API en dos líneas
 
 **Productos:** `GET /v1/licencias/{empresa_uuid}` · `GET …/cupo` · `PUT …/usuarios-activos {activos}` · `POST …/consumos {clave_idempotente, tipo, cantidad, usuario, hecho_por_sulotec}` · `DELETE /v1/consumos/{clave}`.
-Un consumo responde `{ permitido: true, nivel: normal|aviso|tolerancia, disponibles, porcentaje }` o `{ permitido: false, motivo: BOLSA_AGOTADA|SOLO_LECTURA|SUSPENDIDA|SIN_LICENCIA }`. Repetir la misma clave devuelve la misma respuesta y no descuenta dos veces.
+Un consumo responde `{ permitido: true, cobrado, nivel: normal|aviso|tolerancia, disponibles, porcentaje }` o `{ permitido: false, motivo: BOLSA_AGOTADA|SOLO_LECTURA|SUSPENDIDA|SIN_LICENCIA }`. Repetir la misma clave devuelve la misma respuesta y no descuenta dos veces.
 
-**Universal:** `/v1/admin/reglas`, `/v1/admin/productos/{clave}/token`, `/v1/admin/planes`, `/v1/admin/licencias` (`PATCH` con `accion`: ampliar, renovar, cambiar_plan, suspender, reactivar, cancelar, titular), `/v1/admin/licencias/{id}/bolsas-extra`, `/v1/admin/consumos?periodo_desde&periodo_hasta&formato=xlsx`, `/v1/admin/solicitudes`, `/v1/admin/bitacora`.
+**Tarifas (Sulotec decide cuánto cuesta cada acción):** el producto solo avisa qué hizo con `tipo` (por ejemplo `scoring`). Si Sulotec tiene
+tarifa para ese `tipo`, se descuentan los tokens de la tarifa y se ignora `cantidad`; sin tarifa se usa `cantidad` (o 1), como antes.
+Toda respuesta permitida trae `cobrado` (tokens descontados). Tarifa en 0: la acción es gratis (`cobrado: 0`, no deja fila de consumo).
+Tarifa con `bloquea: false` (por ejemplo el canal de denuncias): nunca se frena; si no hay saldo o la licencia está vencida/suspendida
+responde `{ permitido: true, cobrado: 0, sin_descuento: true, motivo }` sin descontar. La licencia (`GET /v1/licencias/{empresa}`,
+admin y «Mi licencia») trae `tarifas: [{ tipo, nombre, tokens, bloquea }]` para que el producto muestre el costo antes de hacer la acción.
+Las tarifas iniciales de PLAFT están en `bd/esquema.sql`; después se cambian por la API.
+
+**Universal:** `GET /v1/admin/tarifas?producto=plaft` · `PUT /v1/admin/tarifas/{producto}/{tipo} {nombre, tokens, bloquea, orden}` (crea o actualiza;
+al crear, `nombre` y `tokens` son obligatorios; `tokens` de 0 a 1000; queda en la bitácora con el antes y el después), `/v1/admin/reglas`, `/v1/admin/productos/{clave}/token`, `/v1/admin/planes`, `/v1/admin/licencias` (`PATCH` con `accion`: ampliar, renovar, cambiar_plan, suspender, reactivar, cancelar, titular), `/v1/admin/licencias/{id}/bolsas-extra`, `/v1/admin/consumos?periodo_desde&periodo_hasta&formato=xlsx`, `/v1/admin/solicitudes`, `/v1/admin/bitacora`.
 
 **Empresas (Keycloak):** `GET /v1/admin/empresas` (lista con uuid, nombre, slug y productos) y `POST /v1/admin/empresas {nombre, slug, productos}` (crea el subgrupo de «Empresas» con su UUID y da los roles `producto-*`). Al crear una licencia la empresa recibe el rol del producto; al cancelarla lo pierde. Requiere el cliente `licencias` de Keycloak (`KEYCLOAK_CLIENT_SECRET`).
+
+**Cuenta del titular (reemplaza a `apps/cuenta/cuentas.sh`):** al crear una licencia con `titular_email` (y al cambiar el titular por otro correo
+con `PATCH … {accion: "titular"}`) el servicio crea la cuenta Sulotec del titular, la une al grupo de su empresa y le manda la invitación para
+crear su contraseña (vale 7 días; vuelve a `https://sulotec.com/mis-productos`). La respuesta trae
+`titular_cuenta: { estado, invitacion, clave_temporal?, mensaje }`:
+`estado` = `creada` | `existente` | `otra_empresa` (ya es de otra empresa: no se mueve) | `sin_empresa` (el UUID no está en «Empresas») |
+`sin_keycloak` | `sin_titular` | `error`; `invitacion` = `correo` | `clave_temporal` (Keycloak no pudo mandar el correo: la clave se muestra
+una sola vez, se cambia al entrar y no se guarda en ningún lado) | `ninguna`. Un fallo de Keycloak nunca impide ni revierte la licencia.
+`POST /v1/admin/licencias/{id}/titular/invitar` vuelve a intentarlo (para licencias ya creadas): reinvita solo si la cuenta nunca terminó de
+configurarse; si ya está activa, el titular usa «¿Olvidaste tu contraseña?». Cada intento queda en la bitácora (`titular_invitado`) sin la clave.
 
 **Empresa:** `GET /v1/mi-licencia`, `GET /v1/mi-licencia/{producto}/consumos?periodo=AAAA-MM`, `POST /v1/mi-licencia/{producto}/ampliar {que, cantidad, comentario}`.
 
