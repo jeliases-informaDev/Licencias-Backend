@@ -38,8 +38,12 @@ async function invitar(id) {
   }
   const clave = claveTemporal();
   await llamar(`/users/${id}/reset-password`, { metodo: 'PUT', cuerpo: { type: 'password', value: clave, temporary: true } });
-  // Sin correo de salida no puede verificar el correo al entrar: queda solo el cambio de clave (lo mismo que deja cuentas.sh).
-  await llamar(`/users/${id}`, { metodo: 'PUT', cuerpo: { requiredActions: ['UPDATE_PASSWORD'] } });
+  // Sin correo de salida no puede verificar el correo al entrar: queda solo el cambio de clave, y el correo se da por
+  // verificado porque el administrador entrega la clave a esa direccion (los productos rechazan email_verified: false).
+  // Se manda el usuario completo, como kcadm update: en Keycloak 24+ un PUT parcial pasa por el perfil y puede fallar o vaciar campos.
+  const usuario = await llamar(`/users/${id}`);
+  if (!usuario) throw new Error(`Keycloak no devolvió la cuenta ${id} para dejar la clave temporal.`);
+  await llamar(`/users/${id}`, { metodo: 'PUT', cuerpo: { ...usuario, emailVerified: true, requiredActions: ['UPDATE_PASSWORD'] } });
   return { invitacion: 'clave_temporal', clave_temporal: clave };
 }
 

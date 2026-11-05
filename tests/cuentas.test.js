@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 
 const EMPRESA = '11111111-1111-4111-8111-111111111111';
-let servidor; let asegurar; let usuarios; let pertenencias; let correoFalla; let caido; let llamadas;
+let servidor; let asegurar; let usuarios; let pertenencias; let correoFalla; let caido; let llamadas; let ultimoPut;
 const leerJson = (req) => new Promise((res) => { let d = ''; req.on('data', (c) => { d += c; }); req.on('end', () => res(d ? JSON.parse(d) : null)); });
 const grupos = [
   { id: 'g1', name: 'caja-huancayo', path: '/Empresas/caja-huancayo', attributes: { empresa_uuid: [EMPRESA] } },
@@ -37,7 +37,11 @@ before(async () => {
     m = p.match(/^\/users\/(u\d+)\/reset-password$/);
     if (m) { const b = await leerJson(req); usuarios.find((u) => u.id === m[1]).clave = b; return json(204); }
     m = p.match(/^\/users\/(u\d+)$/);
-    if (m && req.method === 'PUT') { const b = await leerJson(req); Object.assign(usuarios.find((u) => u.id === m[1]), b); return json(204); }
+    if (m && req.method === 'GET') { const { clave, ...u } = usuarios.find((x) => x.id === m[1]) || {}; return u.id ? json(200, u) : json(404); }
+    if (m && req.method === 'PUT') {
+      const b = await leerJson(req); ultimoPut = b;
+      const i = usuarios.findIndex((u) => u.id === m[1]); usuarios[i] = { clave: usuarios[i].clave, ...b }; return json(204);
+    }
     return json(404, { error: `ruta desconocida en la prueba: ${req.method} ${p}` });
   }).listen(0);
   process.env.DATABASE_URL = process.env.DATABASE_URL || 'postgresql://x:x@127.0.0.1:1/x';
@@ -47,7 +51,7 @@ before(async () => {
 });
 after(() => servidor.close());
 beforeEach(() => {
-  usuarios = []; pertenencias = {}; correoFalla = false; caido = false; llamadas = [];
+  usuarios = []; pertenencias = {}; correoFalla = false; caido = false; llamadas = []; ultimoPut = null;
 });
 
 test('crea la cuenta del titular, la une a su empresa y la invita por correo', async () => {
@@ -109,6 +113,7 @@ test('si Keycloak no puede mandar el correo, deja una clave temporal que se camb
   assert.ok(r.clave_temporal.length >= 28);
   assert.deepEqual(usuarios[0].clave, { type: 'password', value: r.clave_temporal, temporary: true });
   assert.deepEqual(usuarios[0].requiredActions, ['UPDATE_PASSWORD']);
+  assert.deepEqual(ultimoPut, { id: 'u1', username: 'ana@ejemplo.com', email: 'ana@ejemplo.com', firstName: 'Ana', lastName: '', enabled: true, emailVerified: true, requiredActions: ['UPDATE_PASSWORD'] }, 'el PUT lleva el usuario completo');
   assert.ok(!r.mensaje.includes(r.clave_temporal), 'la clave no va en el mensaje');
   assert.equal(llamadas.filter((l) => l.endsWith('execute-actions-email')).length, 2, 'prueba con y sin el cliente del portal, como cuentas.sh');
 });
