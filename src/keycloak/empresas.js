@@ -18,6 +18,12 @@ export const ROL_PRODUCTO = { geomatrix: 'producto-auditoria', miradar360: 'prod
 export const esSlug = (v) => typeof v === 'string' && /^[a-z0-9][a-z0-9-]{1,38}$/.test(v);
 export const configurado = () => Boolean(k.clienteSecreto);
 
+// Estado para los fallos de Keycloak. No se usa 502 ni 504: Cloudflare reemplaza esas respuestas del origen por su propia página (sin
+// cabeceras CORS) y el portal solo podría decir «no responde». 424 = falló algo de lo que dependemos; el mensaje llega tal cual.
+const FALLO_KEYCLOAK = 424;
+const ESPERA_MS = 8000;
+const anotar = (texto) => console.error(`Keycloak: ${texto}`);
+
 let cacheToken = { valor: null, hasta: 0 };
 async function token() {
   if (!configurado()) throw new ErrorApi(503, 'KEYCLOAK_NO_CONFIGURADO', 'El servicio no tiene su cliente de Keycloak (KEYCLOAK_CLIENT_SECRET): corre preparar.sh del kit.');
@@ -28,26 +34,38 @@ async function token() {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ grant_type: 'client_credentials', client_id: k.clienteId, client_secret: k.clienteSecreto }),
+      signal: AbortSignal.timeout(ESPERA_MS),
     });
   } catch (e) {
-    throw new ErrorApi(502, 'KEYCLOAK_SIN_ACCESO', `No se pudo hablar con Keycloak en ${base}: ${e.message}`);
+    anotar(`sin respuesta al pedir el token en ${base}: ${e.message}`);
+    throw new ErrorApi(FALLO_KEYCLOAK, 'KEYCLOAK_SIN_ACCESO', `No se pudo hablar con Keycloak en ${base}: ${e.message}`);
   }
-  if (!r.ok) throw new ErrorApi(502, 'KEYCLOAK_SIN_ACCESO', `Keycloak no aceptó al servicio (${r.status}): revisa el cliente «licencias» (ajustar-realm.sh) y su clave (preparar.sh).`);
+  if (!r.ok) anotar(`el token del cliente «${k.clienteId}» fue rechazado (${r.status})`);
+  if (!r.ok) throw new ErrorApi(FALLO_KEYCLOAK, 'KEYCLOAK_SIN_ACCESO', `Keycloak no aceptó al servicio (${r.status}): revisa el cliente «licencias» (ajustar-realm.sh) y su clave (preparar.sh).`);
   const t = await r.json();
   cacheToken = { valor: t.access_token, hasta: Date.now() + Math.max(10, (t.expires_in || 60) - 10) * 1000 };
   return t.access_token;
 }
 
 async function llamar(ruta, { metodo = 'GET', cuerpo } = {}) {
-  const r = await fetch(`${admin}${ruta}`, {
-    method: metodo,
-    headers: { Authorization: `Bearer ${await token()}`, ...(cuerpo ? { 'Content-Type': 'application/json' } : {}) },
-    body: cuerpo ? JSON.stringify(cuerpo) : undefined,
-  });
+  const credencial = await token();
+  let r;
+  try {
+    r = await fetch(`${admin}${ruta}`, {
+      method: metodo,
+      headers: { Authorization: `Bearer ${credencial}`, ...(cuerpo ? { 'Content-Type': 'application/json' } : {}) },
+      body: cuerpo ? JSON.stringify(cuerpo) : undefined,
+      signal: AbortSignal.timeout(ESPERA_MS),
+    });
+  } catch (e) {
+    anotar(`sin respuesta en ${metodo} ${ruta}: ${e.message}`);
+    throw new ErrorApi(FALLO_KEYCLOAK, 'KEYCLOAK_SIN_ACCESO', `Keycloak no respondió a tiempo (${metodo} ${ruta}): ${e.message}`);
+  }
   if (r.status === 404 && metodo === 'GET') return null;
   if (!r.ok) {
     const detalle = await r.text().catch(() => '');
-    throw new ErrorApi(502, 'KEYCLOAK_ERROR', `Keycloak respondió ${r.status} en ${metodo} ${ruta}${detalle ? `: ${detalle.slice(0, 200)}` : ''}`);
+    anotar(`respondió ${r.status} en ${metodo} ${ruta}${detalle ? `: ${detalle.slice(0, 200)}` : ''}`);
+    throw new ErrorApi(FALLO_KEYCLOAK, 'KEYCLOAK_ERROR', `Keycloak respondió ${r.status} en ${metodo} ${ruta}${detalle ? `: ${detalle.slice(0, 200)}` : ''}`);
   }
   if (r.status === 201 || r.status === 204) return { ubicacion: r.headers.get('location') };
   return r.json();
@@ -58,7 +76,7 @@ const atributo = (g, nombre) => g.attributes?.[nombre]?.[0] ?? null;
 async function grupoEmpresas() {
   const grupos = (await llamar('/groups?search=Empresas&exact=true')) || [];
   const g = grupos.find((x) => x.name === 'Empresas');
-  if (!g) throw new ErrorApi(502, 'KEYCLOAK_SIN_EMPRESAS', 'No existe el grupo «Empresas» en Keycloak: corre ajustar-realm.sh.');
+  if (!g) throw new ErrorApi(FALLO_KEYCLOAK, 'KEYCLOAK_SIN_EMPRESAS', 'No existe el grupo «Empresas» en Keycloak: corre ajustar-realm.sh.');
   return g.id;
 }
 const hijosDe = async (pid) => (await llamar(`/groups/${pid}/children?first=0&max=500&briefRepresentation=false`)) || [];
@@ -114,7 +132,7 @@ export async function crearEmpresa({ nombre, slug, productos = [] }) {
   const uuid = randomUUID();
   await llamar(`/groups/${pid}/children`, { metodo: 'POST', cuerpo: { name: slug, attributes: { empresa_uuid: [uuid], empresa_nombre: [nombre.trim()], empresa_slug: [slug] } } });
   const g = (await hijosDe(pid)).find((h) => h.name === slug);
-  if (!g) throw new ErrorApi(502, 'KEYCLOAK_ERROR', 'Keycloak no devolvió el grupo de la empresa recién creada.');
+  if (!g) throw new ErrorApi(FALLO_KEYCLOAK, 'KEYCLOAK_ERROR', 'Keycloak no devolvió el grupo de la empresa recién creada.');
   for (const p of productos) await darProducto(uuid, p, g.id);
   return { uuid, nombre: nombre.trim(), slug, productos };
 }
