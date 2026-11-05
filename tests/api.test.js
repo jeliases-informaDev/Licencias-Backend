@@ -17,7 +17,7 @@ if (!url && !Embebido) {
   const EMPRESA = '7b1f2d4e-5c6a-4b8d-9e0f-1a2b3c4d5e6f';
   const hoy = new Date().toISOString().slice(0, 10);
   const sumar = (d) => new Date(Date.parse(`${hoy}T00:00:00Z`) + d * 86_400_000).toISOString().slice(0, 10);
-  let servidor; let base; let pool; let firmar; let tokenMiradar; let tokenGeo; let universal; let titular; let otro; let embebido;
+  let servidor; let base; let pool; let firmar; let tokenMiradar; let tokenGeo; let tokenPlaft; let universal; let titular; let otro; let embebido;
 
   const llamar = async (metodo, ruta, { token, cuerpo, crudo } = {}) => {
     const r = await fetch(`${base}${ruta}`, {
@@ -55,11 +55,14 @@ if (!url && !Embebido) {
     const bd = await import('../src/bd.js');
     pool = bd.pool;
     await bd.migrar();
-    await pool.query('TRUNCATE licencias, planes, bitacora, solicitudes RESTART IDENTITY CASCADE');
+    await pool.query('TRUNCATE licencias, planes, bitacora, solicitudes, tarifas RESTART IDENTITY CASCADE');
+    await bd.migrar(); // vuelve a sembrar las tarifas de fabrica
     await pool.query("UPDATE productos SET token_hash = NULL");
     const { generarToken, hashToken } = await import('../src/auth/productos.js');
     tokenMiradar = generarToken('miradar360');
     tokenGeo = generarToken('geomatrix');
+    tokenPlaft = generarToken('plaft');
+    await pool.query('UPDATE productos SET token_hash = $2 WHERE clave = $1', ['plaft', hashToken(tokenPlaft)]);
     await pool.query('UPDATE productos SET token_hash = $2 WHERE clave = $1', ['miradar360', hashToken(tokenMiradar)]);
     await pool.query('UPDATE productos SET token_hash = $2 WHERE clave = $1', ['geomatrix', hashToken(tokenGeo)]);
     const { crearApp } = await import('../src/app.js');
@@ -105,6 +108,7 @@ if (!url && !Embebido) {
     assert.equal(v.estado, 200);
     assert.equal(v.datos.puede_crear_usuarios, true);
     assert.equal(v.datos.tokens.disponibles, 10);
+    assert.deepEqual(v.datos.tarifas, [], 'miradar360 no tiene tarifas: lista vacia');
     assert.equal((await llamar('GET', `/v1/licencias/${EMPRESA}`, { token: tokenGeo })).estado, 404, 'otro producto no ve esta licencia');
     assert.equal((await llamar('GET', `/v1/licencias/${EMPRESA}/cupo`, { token: tokenMiradar })).datos.puede_crear, true);
     const rep = await llamar('PUT', `/v1/licencias/${EMPRESA}/usuarios-activos`, { token: tokenMiradar, cuerpo: { activos: 3 } });
@@ -206,6 +210,60 @@ if (!url && !Embebido) {
     assert.equal(estado.rows[0].estado, 'SUSPENDIDA');
     const renovar = await llamar('PATCH', `/v1/admin/licencias/${lic.datos.id}`, { token: universal, cuerpo: { accion: 'renovar', vencimiento: sumar(365) } });
     assert.equal(renovar.datos.estado, 'ACTIVA');
+  });
+
+  test('tarifas: Sulotec decide cuanto cuesta cada accion', async () => {
+    const EMPRESA2 = '2c3d4e5f-6a7b-4c8d-9e0f-112233445566';
+    const lic = await llamar('POST', '/v1/admin/licencias', { token: universal, cuerpo: { empresa_uuid: EMPRESA2, empresa_nombre: 'Empresa Tarifas', producto: 'plaft', usuarios_max: 2, tokens_periodo: 3, vencimiento: sumar(30) } });
+    assert.equal(lic.estado, 201, JSON.stringify(lic.datos));
+    assert.equal(lic.datos.tarifas.length, 10);
+    assert.deepEqual(lic.datos.tarifas[0], { tipo: 'busqueda_listas', nombre: 'Búsqueda en listas negativas', tokens: 1, bloquea: true });
+    assert.equal((await llamar('GET', `/v1/licencias/${EMPRESA2}`, { token: tokenPlaft })).datos.tarifas.find((t) => t.tipo === 'denuncia_crear').bloquea, false);
+
+    const consumir = (clave, tipo, extra = {}) => llamar('POST', `/v1/licencias/${EMPRESA2}/consumos`, { token: tokenPlaft, cuerpo: { clave_idempotente: clave, tipo, ...extra } });
+    const s1 = await consumir('t1', 'scoring', { cantidad: 50 });
+    assert.equal(s1.datos.cobrado, 2, 'la tarifa manda sobre la cantidad del producto');
+    assert.equal(s1.datos.usados, 2);
+    const s2 = await consumir('t2', 'consulta_libre', { cantidad: 1 });
+    assert.equal(s2.datos.cobrado, 1, 'tipo sin tarifa: usa la cantidad');
+    assert.equal(s2.datos.disponibles, 0);
+
+    const gratis = await llamar('PUT', '/v1/admin/tarifas/plaft/ayuda_gratis', { token: universal, cuerpo: { nombre: 'Ayuda', tokens: 0 } });
+    assert.equal(gratis.estado, 200, JSON.stringify(gratis.datos));
+    const s3 = await consumir('t3', 'ayuda_gratis');
+    assert.equal(s3.datos.permitido, true);
+    assert.equal(s3.datos.cobrado, 0);
+    assert.equal(s3.datos.usados, 3);
+    assert.equal((await pool.query("SELECT count(*)::int AS n FROM consumos WHERE clave_idempotente = 't3'")).rows[0].n, 0, 'lo gratis no deja fila');
+
+    const s4 = await consumir('t4', 'matriz_registrar');
+    assert.equal(s4.datos.permitido, false);
+    assert.equal(s4.datos.motivo, 'BOLSA_AGOTADA');
+    const s5 = await consumir('t5', 'denuncia_crear');
+    assert.equal(s5.datos.permitido, true, 'la denuncia nunca se frena');
+    assert.equal(s5.datos.cobrado, 0);
+    assert.equal(s5.datos.sin_descuento, true);
+    assert.equal(s5.datos.motivo, 'BOLSA_AGOTADA');
+    assert.equal((await llamar('GET', `/v1/licencias/${EMPRESA2}`, { token: tokenPlaft })).datos.tokens.usados, 3, 'ni lo gratis ni la denuncia descontaron');
+
+    const lista = await llamar('GET', '/v1/admin/tarifas?producto=plaft', { token: universal });
+    assert.equal(lista.datos.length, 11);
+    assert.equal(lista.datos[0].producto_nombre, 'PLAFT');
+    const cambio = await llamar('PUT', '/v1/admin/tarifas/plaft/scoring', { token: universal, cuerpo: { tokens: 5 } });
+    assert.equal(cambio.datos.tokens, 5);
+    assert.equal(cambio.datos.nombre, 'Evaluación de scoring');
+    assert.equal((await llamar('GET', `/v1/licencias/${EMPRESA2}`, { token: tokenPlaft })).datos.tarifas.find((t) => t.tipo === 'scoring').tokens, 5, 'la vista ve el cambio al instante');
+    const bit = (await llamar('GET', '/v1/admin/bitacora', { token: universal })).datos.find((b) => b.accion === 'tarifa' && b.despues.tipo === 'scoring');
+    assert.equal(bit.antes.tokens, 2);
+    assert.equal(bit.despues.tokens, 5);
+
+    const put = (ruta, cuerpo) => llamar('PUT', `/v1/admin/tarifas/${ruta}`, { token: universal, cuerpo });
+    assert.equal((await put('plaft/Mal-Tipo', { nombre: 'X', tokens: 1 })).estado, 400);
+    assert.equal((await put('plaft/nueva', { nombre: 'X', tokens: 1001 })).estado, 400);
+    assert.equal((await put('plaft/nueva', { tokens: 1 })).estado, 400, 'al crear, nombre es obligatorio');
+    assert.equal((await put('geomatrix/visita', { nombre: 'X', tokens: 1 })).estado, 400, 'producto sin tokens');
+    assert.equal((await put('noexiste/visita', { nombre: 'X', tokens: 1 })).estado, 400);
+    assert.equal((await llamar('PUT', '/v1/admin/tarifas/plaft/scoring', { token: titular, cuerpo: { tokens: 0 } })).estado, 403, 'solo el universal');
   });
 
   test('rotar el token de un producto invalida el anterior', async () => {

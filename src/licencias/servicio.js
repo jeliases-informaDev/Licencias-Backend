@@ -50,6 +50,61 @@ export async function actualizarReglas(d, quien) {
   return despues;
 }
 
+// ---------- tarifas por accion (Sulotec decide cuanto cuesta cada tipo; cache corta por producto) ----------
+const cacheTarifas = new Map();
+async function tarifasDe(producto, c = bd) {
+  const h = cacheTarifas.get(producto);
+  if (h && h.hasta > Date.now()) return h.lista;
+  const { rows } = await c.query('SELECT tipo, nombre, tokens, bloquea FROM tarifas WHERE producto = $1 ORDER BY orden, tipo', [producto]);
+  cacheTarifas.set(producto, { lista: rows, hasta: Date.now() + 60_000 });
+  return rows;
+}
+export const olvidarTarifas = () => cacheTarifas.clear();
+
+export async function listarTarifas(producto) {
+  const { rows } = await consultar(
+    `SELECT t.producto, p.nombre AS producto_nombre, t.tipo, t.nombre, t.tokens, t.bloquea, t.orden FROM tarifas t JOIN productos p ON p.clave = t.producto
+     ${producto ? 'WHERE t.producto = $1' : ''} ORDER BY p.nombre, t.orden, t.tipo`,
+    producto ? [producto] : [],
+  );
+  return rows;
+}
+
+export async function guardarTarifa(producto, tipo, d, quien) {
+  exigir(typeof tipo === 'string' && /^[a-z0-9_]{2,60}$/.test(tipo), 'tipo: solo minúsculas, números y guion bajo, de 2 a 60 caracteres.');
+  const pr = (await consultar('SELECT clave, usa_tokens FROM productos WHERE clave = $1', [producto])).rows[0];
+  exigir(pr, 'producto no existe.');
+  exigir(pr.usa_tokens, 'Este producto se licencia solo por usuarios: no tiene tarifas de tokens.');
+  if (d.nombre !== undefined) exigir(texto(d.nombre, 120), 'nombre es obligatorio (hasta 120 caracteres).');
+  if (d.tokens !== undefined) exigir(entero(d.tokens, 0) && d.tokens <= 1000, 'tokens debe ser un entero entre 0 y 1000.');
+  if (d.bloquea !== undefined) exigir(typeof d.bloquea === 'boolean', 'bloquea debe ser true o false.');
+  if (d.orden !== undefined) exigir(Number.isInteger(d.orden), 'orden debe ser un entero.');
+  const t = await transaccion(async (c) => {
+    const antes = (await c.query('SELECT tipo, nombre, tokens, bloquea, orden FROM tarifas WHERE producto = $1 AND tipo = $2 FOR UPDATE', [producto, tipo])).rows[0] || null;
+    let fila;
+    if (!antes) {
+      exigir(d.nombre !== undefined && d.tokens !== undefined, 'Para crear una tarifa nueva indica nombre y tokens.');
+      fila = (await c.query(
+        'INSERT INTO tarifas (producto, tipo, nombre, tokens, bloquea, orden) VALUES ($1, $2, $3, $4, $5, $6) RETURNING tipo, nombre, tokens, bloquea, orden',
+        [producto, tipo, d.nombre.trim(), d.tokens, d.bloquea ?? true, d.orden ?? 0],
+      )).rows[0];
+    } else {
+      const set = {};
+      for (const k of ['nombre', 'tokens', 'bloquea', 'orden']) if (d[k] !== undefined) set[k] = k === 'nombre' ? d[k].trim() : d[k];
+      const cols = Object.keys(set);
+      exigir(cols.length > 0, 'No hay nada que cambiar: indica nombre, tokens, bloquea u orden.');
+      fila = (await c.query(
+        `UPDATE tarifas SET ${cols.map((k, i) => `${k} = $${i + 3}`).join(', ')}, actualizado_en = now() WHERE producto = $1 AND tipo = $2 RETURNING tipo, nombre, tokens, bloquea, orden`,
+        [producto, tipo, ...cols.map((k) => set[k])],
+      )).rows[0];
+    }
+    await bitacora(c, quien, 'tarifa', null, antes && { producto, ...antes }, { producto, ...fila });
+    return fila;
+  });
+  olvidarTarifas();
+  return { producto, ...t };
+}
+
 const bitacora = (c, quien, accion, licenciaId, antes, despues) => c.query(
   'INSERT INTO bitacora (quien, accion, licencia_id, antes, despues) VALUES ($1, $2, $3, $4, $5)',
   [quien, accion, licenciaId, json(antes), json(despues)],
@@ -86,7 +141,7 @@ async function contexto(c, l, hoy) {
   };
 }
 
-function vista(l, ctx, r, hoy) {
+function vista(l, ctx, r, hoy, tarifas = []) {
   const estado = estadoCalculado(l, hoy, r);
   const restanteExtra = ctx.extras.reduce((s, x) => s + x.restante, 0);
   const t = l.usa_tokens
@@ -107,6 +162,7 @@ function vista(l, ctx, r, hoy) {
     puede_crear_usuarios: estado === 'ACTIVA' && cupo.puedeCrear,
     periodo: ctx.periodo,
     tokens: t && { bolsa: t.bolsa, extra: t.extra, capacidad: t.capacidad, usados: t.usados, disponibles: t.disponibles, porcentaje: t.porcentaje, nivel: t.nivel, tolerancia: t.tolerancia, tolerancia_max: t.toleranciaMax },
+    tarifas: l.usa_tokens ? tarifas.map((x) => ({ tipo: x.tipo, nombre: x.nombre, tokens: x.tokens, bloquea: x.bloquea })) : [],
     inicio: l.inicio,
     vencimiento: l.vencimiento,
     dias_para_vencer: diasPara(l.vencimiento, hoy),
@@ -117,7 +173,7 @@ function vista(l, ctx, r, hoy) {
 
 async function armarVista(c, l) {
   const hoy = hoyLocal();
-  return vista(l, await contexto(c, l, hoy), await reglas(c), hoy);
+  return vista(l, await contexto(c, l, hoy), await reglas(c), hoy, l.usa_tokens ? await tarifasDe(l.producto, c) : []);
 }
 
 export async function vistaPorId(id, c = bd) {
@@ -162,12 +218,15 @@ async function registrarAviso(c, licenciaId, tipo, periodo, destinatario) {
 
 export async function consumir(productoClave, empresaUuid, datos) {
   const clave = datos.clave_idempotente;
-  const cantidad = datos.cantidad ?? 1;
   const porSulotec = datos.hecho_por_sulotec === true;
   exigir(texto(clave, 200), 'clave_idempotente es obligatoria (texto de hasta 200 caracteres, única por consulta).');
   exigir(texto(datos.tipo, 60), 'tipo es obligatorio (qué se consumió, por ejemplo consulta_reniec).');
-  exigir(entero(cantidad, 1) && cantidad <= 1000, 'cantidad debe ser un entero entre 1 y 1000.');
   exigir(datos.usuario == null || texto(datos.usuario, 200), 'usuario debe ser un texto corto.');
+  // Si Sulotec tiene tarifa para este tipo, manda la tarifa y se ignora la cantidad que mande el producto. Sin tarifa se
+  // mantiene lo de antes (cantidad ?? 1) para no romper los productos ya desplegados.
+  const tarifa = (await tarifasDe(productoClave)).find((x) => x.tipo === datos.tipo) || null;
+  const cantidad = tarifa ? tarifa.tokens : datos.cantidad ?? 1;
+  if (!tarifa) exigir(entero(cantidad, 1) && cantidad <= 1000, 'cantidad debe ser un entero entre 1 y 1000.');
 
   const { respuesta, correos } = await transaccion(async (c) => {
     const previo = await c.query('SELECT respuesta FROM consumos WHERE clave_idempotente = $1', [clave]);
@@ -180,13 +239,22 @@ export async function consumir(productoClave, empresaUuid, datos) {
     const ctx = await contexto(c, l, hoy);
     const estado = estadoCalculado(l, hoy, r);
     const restanteExtra = ctx.extras.reduce((s, x) => s + x.restante, 0);
-    const ev = evaluarConsumo({
-      estado, cantidad, hechoPorSulotec: porSulotec,
+    const saldo = {
       bolsa: ctx.fila.bolsa, consumidos: ctx.fila.consumidos, deExtra: ctx.fila.de_extra, restanteExtra, tolerancia: ctx.fila.tolerancia,
       avisoPct: r.avisoPct, toleranciaPct: r.toleranciaPct,
-    });
+    };
+    // Accion gratis (tarifa en 0): no descuenta ni deja fila en consumos (la tabla exige cantidad > 0).
+    if (cantidad === 0) {
+      const t = resumenTokens(saldo);
+      return { respuesta: { permitido: true, cobrado: 0, nivel: t.nivel, disponibles: t.disponibles, porcentaje: t.porcentaje, capacidad: t.capacidad, usados: t.usados, periodo: ctx.periodo }, correos: [] };
+    }
+    const ev = evaluarConsumo({ estado, cantidad, hechoPorSulotec: porSulotec, ...saldo });
     const correos = [];
     const comun = { disponibles: ev.disponibles, porcentaje: ev.porcentaje, capacidad: ev.capacidad, usados: ev.usados, periodo: ctx.periodo };
+    // Acciones que nunca se frenan (bloquea = false): si no se puede descontar, pasan igual sin descontar.
+    if (!ev.permitido && tarifa && tarifa.bloquea === false) {
+      return { respuesta: { permitido: true, cobrado: 0, sin_descuento: true, motivo: ev.motivo, nivel: ev.nivel, ...comun }, correos };
+    }
     if (!ev.permitido) {
       if (ev.motivo === 'BOLSA_AGOTADA' && l.titular_email && await registrarAviso(c, l.id, 'bloqueo', ctx.periodo, l.titular_email)) {
         correos.push({ para: l.titular_email, ...plantillas.bloqueo(l, ev) });
@@ -210,7 +278,7 @@ export async function consumir(productoClave, empresaUuid, datos) {
          de_extra = periodos.de_extra + EXCLUDED.de_extra, tolerancia = periodos.tolerancia + EXCLUDED.tolerancia`,
       [l.id, ctx.periodo, ctx.fila.bolsa, ev.reparto.deBolsa, ev.reparto.deExtra, ev.reparto.deTolerancia],
     );
-    const respuesta = { permitido: true, nivel: ev.nivel, ...comun };
+    const respuesta = { permitido: true, cobrado: cantidad, nivel: ev.nivel, ...comun };
     await c.query(
       `INSERT INTO consumos (licencia_id, periodo, usuario, tipo, cantidad, hecho_por_sulotec, nivel, de_bolsa, de_extra, de_tolerancia, extras_usados, clave_idempotente, detalle, respuesta)
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
