@@ -16,6 +16,31 @@ INSERT INTO productos (clave, nombre, usa_tokens) VALUES
   ('dashboard', 'Dashboard Empresarial', false)
 ON CONFLICT (clave) DO NOTHING;
 
+-- Tarifas por accion: Sulotec decide cuantos tokens cuesta cada tipo de accion de un producto (el producto solo avisa
+-- que hizo). bloquea = false: la accion nunca se frena (por ejemplo el canal de denuncias); si no hay saldo pasa sin descontar.
+CREATE TABLE IF NOT EXISTS tarifas (
+  producto text REFERENCES productos (clave) ON DELETE CASCADE,
+  tipo text,
+  nombre text NOT NULL,
+  tokens integer NOT NULL CHECK (tokens >= 0 AND tokens <= 1000),
+  bloquea boolean NOT NULL DEFAULT true,
+  orden integer NOT NULL DEFAULT 0,
+  actualizado_en timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (producto, tipo)
+);
+INSERT INTO tarifas (producto, tipo, nombre, tokens, bloquea, orden) VALUES
+  ('plaft', 'busqueda_listas', 'Búsqueda en listas negativas', 1, true, 10),
+  ('plaft', 'lista_pdf', 'PDF de una coincidencia de listas', 1, true, 20),
+  ('plaft', 'scoring', 'Evaluación de scoring', 2, true, 30),
+  ('plaft', 'matriz_registrar', 'Registrar una matriz de riesgo', 3, true, 40),
+  ('plaft', 'matriz_pdf', 'PDF de una matriz', 1, true, 50),
+  ('plaft', 'denuncia_crear', 'Registrar una denuncia', 2, false, 60),
+  ('plaft', 'denuncia_documentos', 'Archivos de una denuncia', 1, false, 70),
+  ('plaft', 'operacion_registrar', 'Registrar una operación', 2, true, 80),
+  ('plaft', 'operacion_pdf', 'PDF de una operación', 1, true, 90),
+  ('plaft', 'mensaje_indira', 'Mensaje a Indira', 1, true, 100)
+ON CONFLICT (producto, tipo) DO NOTHING;
+
 -- Parametros de negocio: se cambian desde /v1/admin/reglas sin programar.
 CREATE TABLE IF NOT EXISTS reglas (
   clave text PRIMARY KEY,

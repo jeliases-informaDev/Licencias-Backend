@@ -29,7 +29,10 @@ rutasAdmin.post('/empresas', async (req, res) => {
 rutasAdmin.get('/productos', async (req, res) => res.json(await s.listarProductos()));
 rutasAdmin.post('/productos/:clave/token', async (req, res) => res.status(201).json(await s.rotarToken(req.params.clave, quien(req))));
 
-rutasAdmin.get('/planes', async (req, res) => res.json(await s.listarPlanes(req.query.producto)));
+rutasAdmin.get('/tarifas', async (req, res) => res.json(await s.listarTarifas(req.query.producto)));
+rutasAdmin.put('/tarifas/:producto/:tipo', async (req, res) => res.json(await s.guardarTarifa(req.params.producto, req.params.tipo, req.body || {}, quien(req))));
+
+rutasAdmin.get('/planes',async (req, res) => res.json(await s.listarPlanes(req.query.producto)));
 rutasAdmin.post('/planes', async (req, res) => res.status(201).json(await s.crearPlan(req.body || {}, quien(req))));
 rutasAdmin.patch('/planes/:id', async (req, res) => res.json(await s.actualizarPlan(id(req), req.body || {}, quien(req))));
 
@@ -37,6 +40,7 @@ rutasAdmin.get('/licencias', async (req, res) => res.json(await s.listarLicencia
 rutasAdmin.post('/licencias', async (req, res) => res.status(201).json(await s.crearLicencia(req.body || {}, quien(req))));
 rutasAdmin.get('/licencias/:id', async (req, res) => res.json(await s.vistaPorId(id(req))));
 rutasAdmin.patch('/licencias/:id', async (req, res) => res.json(await s.modificarLicencia(id(req), req.body || {}, quien(req))));
+rutasAdmin.post('/licencias/:id/titular/invitar', async (req, res) => res.json(await s.invitarTitular(id(req), quien(req))));
 rutasAdmin.post('/licencias/:id/bolsas-extra', async (req, res) => res.status(201).json(await s.agregarBolsaExtra(id(req), req.body || {}, quien(req))));
 rutasAdmin.get('/licencias/:id/consumos', async (req, res) => {
   await s.vistaPorId(id(req));
