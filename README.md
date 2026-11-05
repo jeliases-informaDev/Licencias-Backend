@@ -25,6 +25,14 @@ consumo con clave idempotente, avisos, vencimientos y bitácora. Los productos n
 **Productos:** `GET /v1/licencias/{empresa_uuid}` · `GET …/cupo` · `PUT …/usuarios-activos {activos}` · `POST …/consumos {clave_idempotente, tipo, cantidad, usuario, hecho_por_sulotec}` · `DELETE /v1/consumos/{clave}`.
 Un consumo responde `{ permitido: true, cobrado, nivel: normal|aviso|tolerancia, disponibles, porcentaje }` o `{ permitido: false, motivo: BOLSA_AGOTADA|SOLO_LECTURA|SUSPENDIDA|SIN_LICENCIA }`. Repetir la misma clave devuelve la misma respuesta y no descuenta dos veces.
 
+**Cuentas de los usuarios (regla: todos los usuarios de una empresa entran con cuenta Sulotec; ninguna contraseña vive en el producto):**
+el titular agrega al usuario desde el producto (allí elige su rol) y el producto llama a `POST /v1/licencias/{empresa_uuid}/cuentas {correo, nombre?, reinvitar?}`.
+Sulotec crea la cuenta, la une al grupo de la empresa y le manda la invitación. Responde 200 con `{ estado, invitacion, clave_temporal?, mensaje }`
+(la misma forma que `titular_cuenta`, más abajo): `estado` = `creada` | `existente` | `otra_empresa` | `sin_empresa` | `sin_keycloak` | `error`.
+Los fallos de Keycloak no salen como error HTTP: llegan con `estado: 'error'` y el producto decide por el estado. Exige licencia de ese producto
+(si no, 404 `SIN_LICENCIA`) y un correo válido (400). No revisa el cupo: el producto lo pide antes con `GET …/cupo`. Queda en la bitácora
+(`cuenta_invitada`) con el producto, el estado y el tipo de invitación, nunca la clave temporal.
+
 **Tarifas (Sulotec decide cuánto cuesta cada acción):** el producto solo avisa qué hizo con `tipo` (por ejemplo `scoring`). Si Sulotec tiene
 tarifa para ese `tipo`, se descuentan los tokens de la tarifa y se ignora `cantidad`; sin tarifa se usa `cantidad` (o 1), como antes.
 Toda respuesta permitida trae `cobrado` (tokens descontados). Tarifa en 0: la acción es gratis (`cobrado: 0`, no deja fila de consumo).
