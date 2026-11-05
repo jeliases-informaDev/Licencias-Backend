@@ -47,7 +47,7 @@ async function token() {
   return t.access_token;
 }
 
-async function llamar(ruta, { metodo = 'GET', cuerpo } = {}) {
+export async function llamar(ruta, { metodo = 'GET', cuerpo } = {}) {
   const credencial = await token();
   let r;
   try {
@@ -71,15 +71,15 @@ async function llamar(ruta, { metodo = 'GET', cuerpo } = {}) {
   return r.json();
 }
 
-const atributo = (g, nombre) => g.attributes?.[nombre]?.[0] ?? null;
+export const atributo = (g, nombre) => g.attributes?.[nombre]?.[0] ?? null;
 
-async function grupoEmpresas() {
+export async function grupoEmpresas() {
   const grupos = (await llamar('/groups?search=Empresas&exact=true')) || [];
   const g = grupos.find((x) => x.name === 'Empresas');
   if (!g) throw new ErrorApi(FALLO_KEYCLOAK, 'KEYCLOAK_SIN_EMPRESAS', 'No existe el grupo «Empresas» en Keycloak: corre ajustar-realm.sh.');
   return g.id;
 }
-const hijosDe = async (pid) => (await llamar(`/groups/${pid}/children?first=0&max=500&briefRepresentation=false`)) || [];
+export const hijosDe = async (pid) => (await llamar(`/groups/${pid}/children?first=0&max=500&briefRepresentation=false`)) || [];
 
 export async function listarEmpresas() {
   const hijos = await hijosDe(await grupoEmpresas());

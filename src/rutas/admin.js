@@ -40,6 +40,7 @@ rutasAdmin.get('/licencias', async (req, res) => res.json(await s.listarLicencia
 rutasAdmin.post('/licencias', async (req, res) => res.status(201).json(await s.crearLicencia(req.body || {}, quien(req))));
 rutasAdmin.get('/licencias/:id', async (req, res) => res.json(await s.vistaPorId(id(req))));
 rutasAdmin.patch('/licencias/:id', async (req, res) => res.json(await s.modificarLicencia(id(req), req.body || {}, quien(req))));
+rutasAdmin.post('/licencias/:id/titular/invitar', async (req, res) => res.json(await s.invitarTitular(id(req), quien(req))));
 rutasAdmin.post('/licencias/:id/bolsas-extra', async (req, res) => res.status(201).json(await s.agregarBolsaExtra(id(req), req.body || {}, quien(req))));
 rutasAdmin.get('/licencias/:id/consumos', async (req, res) => {
   await s.vistaPorId(id(req));

@@ -8,6 +8,7 @@ import { generarToken, hashToken } from '../auth/productos.js';
 import { evaluarConsumo, resumenTokens, evaluarCupo, estadoCalculado, diasPara, periodoDe, fechaLocal, sumarMeses } from './reglas.js';
 import { enviar, plantillas } from './correos.js';
 import { configurado as keycloakConfigurado, darProducto, quitarProducto } from '../keycloak/empresas.js';
+import { asegurarCuentaTitular } from '../keycloak/cuentas.js';
 
 const bd = { query: consultar };
 export const hoyLocal = () => fechaLocal(new Date(), config.zonaHoraria);
@@ -122,6 +123,18 @@ async function sincronizarRol(v, dar) {
   } catch (e) {
     console.error(`Keycloak: ${e.message}`);
   }
+}
+
+// Cuenta Sulotec del titular: se crea, se une a su empresa y se invita sola. Siempre despues de confirmar la transaccion y
+// nunca la revierte (asegurarCuentaTitular no lanza). La bitacora guarda el estado y el tipo de invitacion, jamas la clave.
+async function cuentaTitular(v, quien, reinvitar = false) {
+  const r = await asegurarCuentaTitular({ correo: v.titular?.email, nombre: v.titular?.nombre, empresaUuid: v.empresa_uuid, reinvitar });
+  await bitacora(bd, quien, 'titular_invitado', v.id, null, { estado: r.estado, invitacion: r.invitacion, reinvitar }).catch((e) => console.error(`Bitácora: ${e.message}`));
+  return r;
+}
+
+export async function invitarTitular(id, quien) {
+  return { titular_cuenta: await cuentaTitular(await vistaPorId(id), quien, true) };
 }
 
 // ---------- lectura ----------
@@ -418,7 +431,7 @@ export async function crearLicencia(d, quien) {
   });
   if (v.titular?.email) enviarLuego([{ para: v.titular.email, ...plantillas.licenciaCreada(v) }]);
   await sincronizarRol(v, true);
-  return v;
+  return { ...v, titular_cuenta: await cuentaTitular(v, quien) };
 }
 
 const ACCIONES = ['ampliar', 'renovar', 'cambiar_plan', 'suspender', 'reactivar', 'cancelar', 'titular'];
@@ -468,11 +481,12 @@ export async function modificarLicencia(id, d, quien) {
     if (set.tokens_periodo !== undefined) await c.query('UPDATE periodos SET bolsa = $2 WHERE licencia_id = $1 AND periodo = $3', [id, set.tokens_periodo, periodoDe(hoy)]);
     const despues = await vistaPorId(id, c);
     await bitacora(c, quien, d.accion, id, antes, despues);
-    return despues;
-  }).then(async (despues) => {
+    return [antes, despues];
+  }).then(async ([antes, despues]) => {
     if (d.accion === 'cancelar') await sincronizarRol(despues, false);
     else if (d.accion === 'reactivar' || d.accion === 'renovar') await sincronizarRol(despues, true);
-    return despues;
+    const nuevoTitular = d.accion === 'titular' && despues.titular.email && despues.titular.email.toLowerCase() !== (antes.titular.email || '').toLowerCase();
+    return nuevoTitular ? { ...despues, titular_cuenta: await cuentaTitular(despues, quien) } : despues;
   });
 }
 

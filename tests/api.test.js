@@ -6,6 +6,7 @@ import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createServer } from 'node:http';
 import { generateKeyPair, exportJWK, SignJWT } from 'jose';
 
 const url = process.env.DATABASE_URL_PRUEBA;
@@ -17,7 +18,7 @@ if (!url && !Embebido) {
   const EMPRESA = '7b1f2d4e-5c6a-4b8d-9e0f-1a2b3c4d5e6f';
   const hoy = new Date().toISOString().slice(0, 10);
   const sumar = (d) => new Date(Date.parse(`${hoy}T00:00:00Z`) + d * 86_400_000).toISOString().slice(0, 10);
-  let servidor; let base; let pool; let firmar; let tokenMiradar; let tokenGeo; let tokenPlaft; let universal; let titular; let otro; let embebido;
+  let servidor; let kcCaido; let base; let pool; let firmar; let tokenMiradar; let tokenGeo; let tokenPlaft; let universal; let titular; let otro; let embebido;
 
   const llamar = async (metodo, ruta, { token, cuerpo, crudo } = {}) => {
     const r = await fetch(`${base}${ruta}`, {
@@ -47,6 +48,10 @@ if (!url && !Embebido) {
     process.env.KEYCLOAK_JWKS_LOCAL = JSON.stringify({ keys: [jwk] });
     process.env.TAREAS = '0';
     process.env.SMTP_HOST = '';
+    // Keycloak "caido": responde 500 a todo. Crear licencias igual debe funcionar (la cuenta del titular queda en error).
+    kcCaido = createServer((req, res) => { res.writeHead(500); res.end(); }).listen(0);
+    process.env.KEYCLOAK_INTERNO = `http://127.0.0.1:${kcCaido.address().port}`;
+    process.env.KEYCLOAK_CLIENT_SECRET = 'secreto-de-prueba';
     firmar = (claims) => new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'prueba' }).setIssuer(EMISOR).setAudience('licencias').setIssuedAt().setExpirationTime('10m').sign(privateKey);
     universal = await firmar({ preferred_username: 'uni', email: 'uni@sulotec.com', name: 'Uni Versal', roles: ['administrador-general'] });
     titular = await firmar({ preferred_username: 'ana', email: 'ana@empresa.pe', name: 'Ana', roles: ['producto-miradar360'], empresa_uuid: EMPRESA, empresa_nombre: 'Empresa Prueba' });
@@ -72,6 +77,7 @@ if (!url && !Embebido) {
 
   after(async () => {
     servidor?.close();
+    kcCaido?.close();
     await pool?.end();
     await embebido?.stop();
   });
@@ -97,6 +103,16 @@ if (!url && !Embebido) {
     assert.equal(lic.datos.estado, 'ACTIVA');
     assert.equal(lic.datos.tokens.bolsa, 10);
     assert.equal(lic.datos.plan, 'Básico');
+    assert.equal(lic.datos.titular_cuenta.estado, 'error', 'Keycloak caido no impide crear la licencia');
+    assert.equal(lic.datos.titular_cuenta.invitacion, 'ninguna');
+    assert.equal((await pool.query('SELECT count(*)::int AS n FROM licencias WHERE id = $1', [licenciaId])).rows[0].n, 1, 'la licencia quedo guardada');
+    const reinv = await llamar('POST', `/v1/admin/licencias/${licenciaId}/titular/invitar`, { token: universal });
+    assert.equal(reinv.estado, 200);
+    assert.equal(reinv.datos.titular_cuenta.estado, 'error');
+    const sinCambio = await llamar('PATCH', `/v1/admin/licencias/${licenciaId}`, { token: universal, cuerpo: { accion: 'titular', email: 'ana@empresa.pe', nombre: 'Ana' } });
+    assert.equal(sinCambio.datos.titular_cuenta, undefined, 'mismo correo: no se invita otra vez');
+    const bitT = await pool.query("SELECT despues FROM bitacora WHERE accion = 'titular_invitado' AND licencia_id = $1 ORDER BY id", [licenciaId]);
+    assert.deepEqual(bitT.rows.map((f) => f.despues), [{ estado: 'error', invitacion: 'ninguna', reinvitar: false }, { estado: 'error', invitacion: 'ninguna', reinvitar: true }]);
     const dup2 = await llamar('POST', '/v1/admin/licencias', { token: universal, cuerpo: { empresa_uuid: EMPRESA, empresa_nombre: 'Empresa Prueba', producto: 'miradar360', usuarios_max: 1 } });
     assert.equal(dup2.estado, 409);
     const mal = await llamar('POST', '/v1/admin/licencias', { token: universal, cuerpo: { empresa_uuid: 'no-es-uuid', empresa_nombre: 'X', producto: 'miradar360', usuarios_max: 1 } });
