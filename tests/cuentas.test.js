@@ -118,5 +118,5 @@ test('Keycloak caido: estado error, no lanza', async () => {
   const r = await asegurar({ correo: 'ana@ejemplo.com', empresaUuid: EMPRESA });
   assert.equal(r.estado, 'error');
   assert.equal(r.invitacion, 'ninguna');
-  assert.match(r.mensaje, /La licencia sí quedó/);
+  assert.match(r.mensaje, /No se perdió nada/);
 });

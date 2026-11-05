@@ -18,6 +18,7 @@ if (!url && !Embebido) {
   const EMPRESA = '7b1f2d4e-5c6a-4b8d-9e0f-1a2b3c4d5e6f';
   const hoy = new Date().toISOString().slice(0, 10);
   const sumar = (d) => new Date(Date.parse(`${hoy}T00:00:00Z`) + d * 86_400_000).toISOString().slice(0, 10);
+  const kc = { encendido: false, grupos: [], usuarios: [], de: {} };
   let servidor; let kcCaido; let base; let pool; let firmar; let tokenMiradar; let tokenGeo; let tokenPlaft; let universal; let titular; let otro; let embebido;
 
   const llamar = async (metodo, ruta, { token, cuerpo, crudo } = {}) => {
@@ -48,8 +49,29 @@ if (!url && !Embebido) {
     process.env.KEYCLOAK_JWKS_LOCAL = JSON.stringify({ keys: [jwk] });
     process.env.TAREAS = '0';
     process.env.SMTP_HOST = '';
-    // Keycloak "caido": responde 500 a todo. Crear licencias igual debe funcionar (la cuenta del titular queda en error).
-    kcCaido = createServer((req, res) => { res.writeHead(500); res.end(); }).listen(0);
+    // Keycloak de mentira: "caido" (500 a todo) salvo cuando una prueba lo enciende. Con Keycloak caido crear licencias
+    // igual debe funcionar (la cuenta del titular queda en error).
+    kcCaido = createServer(async (req, res) => {
+      const json = (codigo, datos) => { res.writeHead(codigo, { 'content-type': 'application/json' }); res.end(datos === undefined ? '' : JSON.stringify(datos)); };
+      if (!kc.encendido) return json(500);
+      const url = new URL(req.url, 'http://x');
+      const p = url.pathname.replace('/admin/realms/sulotec', '');
+      if (p === '/realms/sulotec/protocol/openid-connect/token') return json(200, { access_token: 'tok', expires_in: 60 });
+      if (p === '/groups') return json(200, [{ id: 'padre', name: 'Empresas' }]);
+      if (p === '/groups/padre/children') return json(200, kc.grupos);
+      if (p === '/users' && req.method === 'GET') return json(200, kc.usuarios.filter((u) => u.email === url.searchParams.get('email')));
+      if (p === '/users' && req.method === 'POST') {
+        let d = ''; for await (const c of req) d += c;
+        const id = `u${kc.usuarios.length + 1}`; kc.usuarios.push({ id, ...JSON.parse(d) }); kc.de[id] = [];
+        res.writeHead(201, { location: `http://x/admin/realms/sulotec/users/${id}` }); return res.end();
+      }
+      let m = p.match(/^\/users\/(u\d+)\/groups$/);
+      if (m) return json(200, kc.de[m[1]].map((gid) => kc.grupos.find((g) => g.id === gid)));
+      m = p.match(/^\/users\/(u\d+)\/groups\/(\w+)$/);
+      if (m) { kc.de[m[1]].push(m[2]); return json(204); }
+      if (/^\/users\/u\d+\/execute-actions-email$/.test(p)) return json(204);
+      return json(404);
+    }).listen(0);
     process.env.KEYCLOAK_INTERNO = `http://127.0.0.1:${kcCaido.address().port}`;
     process.env.KEYCLOAK_CLIENT_SECRET = 'secreto-de-prueba';
     firmar = (claims) => new SignJWT(claims).setProtectedHeader({ alg: 'RS256', kid: 'prueba' }).setIssuer(EMISOR).setAudience('licencias').setIssuedAt().setExpirationTime('10m').sign(privateKey);
@@ -280,6 +302,39 @@ if (!url && !Embebido) {
     assert.equal((await put('geomatrix/visita', { nombre: 'X', tokens: 1 })).estado, 400, 'producto sin tokens');
     assert.equal((await put('noexiste/visita', { nombre: 'X', tokens: 1 })).estado, 400);
     assert.equal((await llamar('PUT', '/v1/admin/tarifas/plaft/scoring', { token: titular, cuerpo: { tokens: 0 } })).estado, 403, 'solo el universal');
+  });
+
+  test('cuentas de usuarios: el producto pide a Sulotec crear e invitar', async () => {
+    const pedir = (cuerpo, token = tokenMiradar, empresa = EMPRESA) => llamar('POST', `/v1/licencias/${empresa}/cuentas`, { token, cuerpo });
+    const caido = await pedir({ correo: 'nuevo@ejemplo.com' });
+    assert.equal(caido.estado, 200, 'Keycloak caido no sale como error HTTP');
+    assert.equal(caido.datos.estado, 'error');
+    assert.equal((await pedir({ correo: 'no-es-correo' })).estado, 400);
+    assert.equal((await pedir({ correo: 'nuevo@ejemplo.com' }, tokenGeo)).estado, 404, 'geomatrix no tiene licencia en esta empresa');
+    assert.equal((await pedir({ correo: 'nuevo@ejemplo.com' }, tokenMiradar, '9d8c7b6a-5f4e-4d3c-8b2a-1f0e9d8c7b6a')).datos.error, 'SIN_LICENCIA');
+
+    kc.encendido = true;
+    kc.grupos = [{ id: 'g1', name: 'empresa-prueba', path: '/Empresas/empresa-prueba', attributes: { empresa_uuid: [EMPRESA] } },
+      { id: 'g2', name: 'otra', path: '/Empresas/otra', attributes: { empresa_uuid: ['33333333-3333-4333-8333-333333333333'] } }];
+    kc.usuarios = [{ id: 'u1', email: 'de-otra@ejemplo.com' }, { id: 'u2', email: 'ya@ejemplo.com', requiredActions: [] }];
+    kc.de = { u1: ['g2'], u2: ['g1'] };
+    const nueva = await pedir({ correo: 'Nuevo@Ejemplo.com', nombre: 'Nuevo Usuario' });
+    assert.equal(nueva.estado, 200);
+    assert.equal(nueva.datos.estado, 'creada');
+    assert.equal(nueva.datos.invitacion, 'correo');
+    assert.deepEqual(kc.de.u3, ['g1'], 'queda en el grupo de su empresa');
+    const ya = await pedir({ correo: 'ya@ejemplo.com' });
+    assert.equal(ya.datos.estado, 'existente');
+    assert.equal(ya.datos.invitacion, 'ninguna');
+    const otra = await pedir({ correo: 'de-otra@ejemplo.com' });
+    assert.equal(otra.datos.estado, 'otra_empresa');
+    assert.deepEqual(kc.de.u1, ['g2'], 'no se mueve de empresa');
+    kc.encendido = false;
+
+    const bit = await pool.query("SELECT quien, despues FROM bitacora WHERE accion = 'cuenta_invitada' ORDER BY id");
+    assert.deepEqual(bit.rows.map((f) => f.despues.estado), ['error', 'creada', 'existente', 'otra_empresa']);
+    assert.equal(bit.rows[1].quien, 'producto:miradar360');
+    assert.deepEqual(Object.keys(bit.rows[1].despues).sort(), ['estado', 'invitacion', 'producto']);
   });
 
   test('rotar el token de un producto invalida el anterior', async () => {

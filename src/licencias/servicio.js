@@ -8,7 +8,7 @@ import { generarToken, hashToken } from '../auth/productos.js';
 import { evaluarConsumo, resumenTokens, evaluarCupo, estadoCalculado, diasPara, periodoDe, fechaLocal, sumarMeses } from './reglas.js';
 import { enviar, plantillas } from './correos.js';
 import { configurado as keycloakConfigurado, darProducto, quitarProducto } from '../keycloak/empresas.js';
-import { asegurarCuentaTitular } from '../keycloak/cuentas.js';
+import { asegurarCuenta } from '../keycloak/cuentas.js';
 
 const bd = { query: consultar };
 export const hoyLocal = () => fechaLocal(new Date(), config.zonaHoraria);
@@ -128,7 +128,7 @@ async function sincronizarRol(v, dar) {
 // Cuenta Sulotec del titular: se crea, se une a su empresa y se invita sola. Siempre despues de confirmar la transaccion y
 // nunca la revierte (asegurarCuentaTitular no lanza). La bitacora guarda el estado y el tipo de invitacion, jamas la clave.
 async function cuentaTitular(v, quien, reinvitar = false) {
-  const r = await asegurarCuentaTitular({ correo: v.titular?.email, nombre: v.titular?.nombre, empresaUuid: v.empresa_uuid, reinvitar });
+  const r = await asegurarCuenta({ correo: v.titular?.email, nombre: v.titular?.nombre, empresaUuid: v.empresa_uuid, reinvitar });
   await bitacora(bd, quien, 'titular_invitado', v.id, null, { estado: r.estado, invitacion: r.invitacion, reinvitar }).catch((e) => console.error(`Bitácora: ${e.message}`));
   return r;
 }
@@ -218,6 +218,21 @@ export async function reportarActivos(empresaUuid, producto, activos) {
     [l.id, activos],
   );
   return cupoDe(empresaUuid, producto);
+}
+
+// ---------- cuentas de los usuarios de la empresa ----------
+// Todos los usuarios de una empresa entran con cuenta Sulotec: el titular los agrega desde el producto (alli elige el rol)
+// y el producto le pide a Sulotec que cree e invite la cuenta. No revisa cupo (el producto lo pide antes con /cupo). Los
+// fallos de Keycloak no salen como error HTTP: vuelven con estado 'error' y el producto decide por el estado.
+export async function cuentaDeUsuario(productoClave, empresaUuid, d) {
+  exigir(esCorreo(d.correo), 'correo no es un correo válido.');
+  exigir(d.nombre == null || texto(d.nombre, 200), 'nombre debe ser un texto corto.');
+  exigir(d.reinvitar == null || typeof d.reinvitar === 'boolean', 'reinvitar debe ser true o false.');
+  const l = await licenciaDe(bd, empresaUuid, productoClave);
+  const r = await asegurarCuenta({ correo: d.correo, nombre: d.nombre, empresaUuid, reinvitar: d.reinvitar === true });
+  await bitacora(bd, `producto:${productoClave}`, 'cuenta_invitada', l.id, null, { producto: productoClave, estado: r.estado, invitacion: r.invitacion })
+    .catch((e) => console.error(`Bitácora: ${e.message}`));
+  return r;
 }
 
 // ---------- consumo de tokens ----------

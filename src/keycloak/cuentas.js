@@ -1,6 +1,7 @@
-// Cuenta Sulotec del titular de una licencia (Administrador General de la empresa). Al crear la licencia el servicio crea
-// la cuenta en Keycloak, la une al grupo de su empresa y la invita por correo, igual que apps/cuenta/cuentas.sh (que esto
-// reemplaza). Nunca lanza: devuelve un estado y un mensaje listo para el portal, para no tumbar la creacion de la licencia.
+// Cuenta Sulotec de una persona de una empresa: el titular de una licencia (Administrador General) o cualquier usuario que
+// el titular agregue desde un producto (todos entran con cuenta Sulotec; ninguna contrasena vive en el producto). Crea la
+// cuenta en Keycloak, la une al grupo de su empresa y la invita por correo, igual que apps/cuenta/cuentas.sh (que esto
+// reemplaza). Nunca lanza: devuelve un estado y un mensaje listo para mostrar, para no tumbar lo que la llamo.
 // La clave temporal (solo si Keycloak no puede mandar el correo) se devuelve una vez: no se guarda ni se escribe en el log.
 import { randomBytes } from 'node:crypto';
 import { esCorreo } from '../validar.js';
@@ -46,15 +47,15 @@ const textoInvitacion = (inv, correo) => (inv.invitacion === 'correo'
   ? `Se envió a ${correo} la invitación para crear su contraseña (vale 7 días).`
   : 'Keycloak no pudo enviar el correo: entrega la clave temporal por un canal seguro (se muestra una sola vez y se cambia al entrar).');
 
-export async function asegurarCuentaTitular({ correo, nombre, empresaUuid, reinvitar = false }) {
-  if (!configurado()) return { estado: 'sin_keycloak', invitacion: 'ninguna', mensaje: 'El servicio no tiene su cliente de Keycloak: la cuenta del titular no se creó. Créala desde la cuenta Sulotec.' };
-  if (!correo || !esCorreo(correo)) return { estado: 'sin_titular', invitacion: 'ninguna', mensaje: 'La licencia no tiene correo del titular: no se creó ninguna cuenta.' };
+export async function asegurarCuenta({ correo, nombre, empresaUuid, reinvitar = false }) {
+  if (!configurado()) return { estado: 'sin_keycloak', invitacion: 'ninguna', mensaje: 'El servicio de licencias no tiene su cliente de Keycloak: la cuenta no se creó. Avisa a Sulotec.' };
+  if (!correo || !esCorreo(correo)) return { estado: 'sin_titular', invitacion: 'ninguna', mensaje: 'No hay un correo válido: no se creó ninguna cuenta.' };
   correo = correo.trim().toLowerCase();
   try {
     const pid = await grupoEmpresas();
     const hijos = await hijosDe(pid);
     const grupo = hijos.find((h) => (atributo(h, 'empresa_uuid') || '').toLowerCase() === String(empresaUuid).toLowerCase());
-    if (!grupo) return { estado: 'sin_empresa', invitacion: 'ninguna', mensaje: 'La empresa de esta licencia no existe en la cuenta Sulotec (grupo «Empresas»): créala o revisa el UUID; la cuenta del titular no se creó.' };
+    if (!grupo) return { estado: 'sin_empresa', invitacion: 'ninguna', mensaje: 'La empresa de esta licencia no existe en la cuenta Sulotec (grupo «Empresas»): créala o revisa el UUID; la cuenta no se creó.' };
 
     let cuenta = await buscarCuenta(correo);
     if (!cuenta) {
@@ -86,7 +87,8 @@ export async function asegurarCuentaTitular({ correo, nombre, empresaUuid, reinv
         : `La cuenta ${correo} ya está activa: entra con su contraseña de siempre (si la olvidó, puede usar «¿Olvidaste tu contraseña?»).`,
     };
   } catch (e) {
-    console.error(`Keycloak: no se pudo asegurar la cuenta del titular de la empresa ${empresaUuid}: ${e.message}`);
-    return { estado: 'error', invitacion: 'ninguna', mensaje: `No se pudo crear o invitar la cuenta del titular en Keycloak (${e.message}). La licencia sí quedó: usa «Invitar de nuevo» cuando Keycloak responda.` };
+    console.error(`Keycloak: no se pudo asegurar una cuenta de la empresa ${empresaUuid}: ${e.message}`);
+    return { estado: 'error', invitacion: 'ninguna', mensaje: `No se pudo crear o invitar la cuenta en Keycloak (${e.message}). No se perdió nada: vuelve a intentarlo («Invitar de nuevo») cuando Keycloak responda.` };
   }
 }
+export const asegurarCuentaTitular = asegurarCuenta; // nombre anterior
