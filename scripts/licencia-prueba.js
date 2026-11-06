@@ -19,7 +19,7 @@ const opcion = (nombre, porDefecto) => {
 const bandera = (nombre) => args.includes(`--${nombre}`);
 
 if (!producto || producto.startsWith('--')) {
-  console.error('Uso: node --env-file=.env scripts/licencia-prueba.js <geomatrix|miradar360|plaft|buscador|dashboard> [--tokens 20] [--usuarios 3] [--empresa <uuid>] [--nombre "..."] [--titular correo] [--sin-token] [--forzar]');
+  console.error('Uso: node --env-file=.env scripts/licencia-prueba.js <geomatrix|miradar360|plaft|buscador|dashboard|indira> [--tokens 20] [--usuarios 3] [--empresa <uuid>] [--nombre "..."] [--titular correo] [--sin-token] [--forzar]');
   process.exit(1);
 }
 
@@ -37,7 +37,7 @@ const { crearLicencia } = await import('../src/licencias/servicio.js');
 try {
   await migrar();
   const pr = (await consultar('SELECT clave, nombre, usa_tokens FROM productos WHERE clave = $1', [producto])).rows[0];
-  if (!pr) throw new Error(`No existe el producto «${producto}». Productos: geomatrix, miradar360, plaft, buscador, dashboard.`);
+  if (!pr) throw new Error(`No existe el producto «${producto}». Productos: geomatrix, miradar360, plaft, buscador, dashboard, indira.`);
 
   const empresa = opcion('empresa', randomUUID()).toLowerCase();
   const titular = opcion('titular', null);

@@ -13,7 +13,8 @@ INSERT INTO productos (clave, nombre, usa_tokens) VALUES
   ('miradar360', 'MiRadar 360', true),
   ('plaft', 'PLAFT', true),
   ('buscador', 'Buscador Interno', true),
-  ('dashboard', 'Dashboard Empresarial', false)
+  ('dashboard', 'Dashboard Empresarial', false),
+  ('indira', 'Indira', true)
 ON CONFLICT (clave) DO NOTHING;
 
 -- Tarifas por accion: Sulotec decide cuantos tokens cuesta cada tipo de accion de un producto (el producto solo avisa
@@ -38,7 +39,8 @@ INSERT INTO tarifas (producto, tipo, nombre, tokens, bloquea, orden) VALUES
   ('plaft', 'denuncia_documentos', 'Archivos de una denuncia', 1, false, 70),
   ('plaft', 'operacion_registrar', 'Registrar una operación', 2, true, 80),
   ('plaft', 'operacion_pdf', 'PDF de una operación', 1, true, 90),
-  ('plaft', 'mensaje_indira', 'Mensaje a Indira', 1, true, 100)
+  ('plaft', 'mensaje_indira', 'Mensaje a Indira', 1, true, 100),
+  ('indira', 'mensaje_indira', 'Mensaje a Indira', 1, true, 10)
 ON CONFLICT (producto, tipo) DO NOTHING;
 
 -- Parametros de negocio: se cambian desde /v1/admin/reglas sin programar.
@@ -67,6 +69,12 @@ CREATE TABLE IF NOT EXISTS planes (
   creado_en timestamptz NOT NULL DEFAULT now(),
   UNIQUE (producto, nombre)
 );
+-- Plan inicial de Indira: sin tokens_periodo la bolsa seria 0 y el primer mensaje ya daria BOLSA_AGOTADA. usuarios_max = 0
+-- porque Indira no tiene cupo de usuarios. Solo se siembra si Indira no tiene ningun plan: asi no revive si Sulotec lo renombra.
+INSERT INTO planes (producto, nombre, usuarios_max, tokens_periodo)
+  SELECT 'indira', 'Indira inicial', 0, 500
+  WHERE NOT EXISTS (SELECT 1 FROM planes WHERE producto = 'indira')
+ON CONFLICT (producto, nombre) DO NOTHING;
 
 -- Una licencia por empresa y producto. empresa_uuid es el mismo de Keycloak y del producto.
 CREATE TABLE IF NOT EXISTS licencias (

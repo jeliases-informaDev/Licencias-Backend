@@ -205,6 +205,27 @@ export async function vistaDe(empresaUuid, producto) {
   return armarVista(bd, await licenciaDe(bd, empresaUuid, producto));
 }
 
+// Solo lectura: todos los productos de una empresa. Quien lo pide decide que muestra a cada persona.
+export async function resumenDeEmpresa(empresaUuid) {
+  const { rows } = await bd.query(`${SQL_LICENCIA} WHERE l.empresa_uuid = $1 ORDER BY l.producto`, [empresaUuid]);
+  const vistas = await Promise.all(rows.map((l) => armarVista(bd, l)));
+  return {
+    empresa_uuid: empresaUuid,
+    productos: vistas.map((v) => ({
+      producto: v.producto,
+      producto_nombre: v.producto_nombre,
+      plan: v.plan,
+      estado: v.estado,
+      usuarios_max: v.usuarios_max,
+      usuarios_activos: v.usuarios_activos,
+      tokens: v.tokens,
+      vencimiento: v.vencimiento,
+      dias_para_vencer: v.dias_para_vencer,
+      titular_email: v.titular.email,
+    })),
+  };
+}
+
 export async function cupoDe(empresaUuid, producto) {
   const v = await vistaDe(empresaUuid, producto);
   return { puede_crear: v.puede_crear_usuarios, activos: v.usuarios_activos, usuarios_max: v.usuarios_max, estado: v.estado };
