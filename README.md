@@ -25,6 +25,9 @@ consumo con clave idempotente, avisos, vencimientos y bitácora. Los productos n
 **Productos:** `GET /v1/licencias/{empresa_uuid}` · `GET …/cupo` · `PUT …/usuarios-activos {activos}` · `POST …/consumos {clave_idempotente, tipo, cantidad, usuario, hecho_por_sulotec}` · `DELETE /v1/consumos/{clave}`.
 Un consumo responde `{ permitido: true, cobrado, nivel: normal|aviso|tolerancia, disponibles, porcentaje }` o `{ permitido: false, motivo: BOLSA_AGOTADA|SOLO_LECTURA|SUSPENDIDA|SIN_LICENCIA }`. Repetir la misma clave devuelve la misma respuesta y no descuenta dos veces.
 
+**Indira:** el servicio `indira` cobra 1 token por mensaje a su propia licencia (`tipo=mensaje_indira`) y no tiene cupo de usuarios. El plan semilla `Indira inicial` trae 500 tokens al mes (se ajusta por `/v1/admin/planes`); crea la licencia con ese plan o la bolsa queda en 0.
+Solo su token puede pedir `GET /v1/empresas/{empresa_uuid}/resumen`: responde 200 con `{ empresa_uuid, productos: [{ producto, producto_nombre, plan, estado, usuarios_max, usuarios_activos, tokens, vencimiento, dias_para_vencer, titular_email }] }` (lista vacía si la empresa no tiene licencias). Cualquier otro token recibe 403 `PRODUCTO_NO_AUTORIZADO`. Indira recorta estos datos según quién pregunta y nunca le pasa `titular_email` al modelo.
+
 **Cuentas de los usuarios (regla: todos los usuarios de una empresa entran con cuenta Sulotec; ninguna contraseña vive en el producto):**
 el titular agrega al usuario desde el producto (allí elige su rol) y el producto llama a `POST /v1/licencias/{empresa_uuid}/cuentas {correo, nombre?, reinvitar?}`.
 Sulotec crea la cuenta, la une al grupo de la empresa y le manda la invitación. Responde 200 con `{ estado, invitacion, clave_temporal?, mensaje }`

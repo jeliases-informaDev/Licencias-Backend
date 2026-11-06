@@ -337,6 +337,55 @@ if (!url && !Embebido) {
     assert.deepEqual(Object.keys(bit.rows[1].despues).sort(), ['estado', 'invitacion', 'producto']);
   });
 
+  test('indira: producto, tarifa, plan semilla y resumen de la empresa solo para su token', async () => {
+    const { generarToken, hashToken } = await import('../src/auth/productos.js');
+    const tokenIndira = generarToken('indira');
+    await pool.query('UPDATE productos SET token_hash = $2 WHERE clave = $1', ['indira', hashToken(tokenIndira)]);
+    const ruta = `/v1/empresas/${EMPRESA}/resumen`;
+    const tablas = 'SELECT (SELECT count(*)::int FROM consumos) AS consumos, (SELECT coalesce(sum(consumidos + de_extra + tolerancia), 0)::int FROM periodos) AS gastado';
+    const antes = (await pool.query(tablas)).rows[0];
+
+    assert.equal((await llamar('GET', ruta)).estado, 401);
+    const ajeno = await llamar('GET', ruta, { token: tokenPlaft });
+    assert.equal(ajeno.estado, 403);
+    assert.equal(ajeno.datos.error, 'PRODUCTO_NO_AUTORIZADO');
+    assert.equal((await llamar('GET', ruta, { token: tokenMiradar })).estado, 403);
+    assert.equal((await llamar('GET', ruta, { token: universal })).estado, 401, 'un token de persona no sirve aqui');
+    assert.equal((await llamar('GET', '/v1/empresas/no-es-uuid/resumen', { token: tokenIndira })).estado, 400);
+
+    const planes = await llamar('GET', '/v1/admin/planes?producto=indira', { token: universal });
+    assert.equal(planes.datos.length, 1);
+    const plan = planes.datos[0];
+    assert.equal(plan.nombre, 'Indira inicial');
+    assert.equal(plan.usuarios_max, 0);
+    assert.ok(plan.tokens_periodo > 0, 'con 0 tokens el primer mensaje daria BOLSA_AGOTADA');
+    const lic = await llamar('POST', '/v1/admin/licencias', { token: universal, cuerpo: { empresa_uuid: EMPRESA, empresa_nombre: 'Empresa Prueba', producto: 'indira', plan_id: plan.id } });
+    assert.equal(lic.estado, 201, JSON.stringify(lic.datos));
+    assert.equal(lic.datos.tokens.bolsa, plan.tokens_periodo);
+    assert.deepEqual(lic.datos.tarifas, [{ tipo: 'mensaje_indira', nombre: 'Mensaje a Indira', tokens: 1, bloquea: true }]);
+
+    const r = await llamar('GET', ruta, { token: tokenIndira });
+    assert.equal(r.estado, 200, JSON.stringify(r.datos));
+    assert.equal(r.datos.empresa_uuid, EMPRESA);
+    assert.deepEqual(r.datos.productos.map((p) => p.producto), ['indira', 'miradar360', 'plaft']);
+    const mir = r.datos.productos[1];
+    assert.deepEqual(Object.keys(mir).sort(), ['dias_para_vencer', 'estado', 'plan', 'producto', 'producto_nombre', 'titular_email', 'tokens', 'usuarios_activos', 'usuarios_max', 'vencimiento']);
+    assert.equal(mir.producto_nombre, 'MiRadar 360');
+    assert.equal(mir.titular_email, 'ana@empresa.pe');
+    assert.equal(typeof mir.tokens.nivel, 'string');
+    assert.deepEqual(await llamar('GET', `/v1/empresas/${EMPRESA.toUpperCase()}/resumen`, { token: tokenIndira }), r);
+    const vacia = await llamar('GET', '/v1/empresas/11111111-1111-4111-8111-111111111111/resumen', { token: tokenIndira });
+    assert.equal(vacia.estado, 200);
+    assert.deepEqual(vacia.datos.productos, [], 'otra empresa: nada de esta');
+    assert.deepEqual((await pool.query(tablas)).rows[0], antes, 'leer el resumen no toca consumos ni saldos');
+
+    const clave = `indira:${EMPRESA}:mensaje_indira:prueba`;
+    const consumo = await llamar('POST', `/v1/licencias/${EMPRESA}/consumos`, { token: tokenIndira, cuerpo: { clave_idempotente: clave, tipo: 'mensaje_indira', usuario: 'ana', cantidad: 50 } });
+    assert.equal(consumo.datos.permitido, true);
+    assert.equal(consumo.datos.cobrado, 1, 'manda la tarifa, no lo que diga el producto');
+    assert.equal((await llamar('DELETE', `/v1/consumos/${encodeURIComponent(clave)}`, { token: tokenIndira })).datos.anulado, true);
+  });
+
   test('rotar el token de un producto invalida el anterior', async () => {
     const rot = await llamar('POST', '/v1/admin/productos/geomatrix/token', { token: universal });
     assert.equal(rot.estado, 201);

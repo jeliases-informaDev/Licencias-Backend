@@ -6,7 +6,7 @@ import { generarToken, hashToken } from '../src/auth/productos.js';
 
 const clave = process.argv[2];
 if (!clave) {
-  console.error('Uso: node scripts/token-producto.js <geomatrix|miradar360|plaft|buscador|dashboard>');
+  console.error('Uso: node scripts/token-producto.js <geomatrix|miradar360|plaft|buscador|dashboard|indira>');
   process.exit(1);
 }
 await migrar();
